@@ -1,5 +1,5 @@
-Monq = Npm.require("monq")(process.env.MONGO_URL)
-queue = Monq.queue "jobs"
+#Monq = Npm.require("monq")(process.env.MONGO_URL)
+#queue = Monq.queue "jobs"
 
 #
 # Abstract Job class for all actual jobs to subclass
@@ -28,12 +28,26 @@ class Job
 
     className = job.constructor.name
 
-    job.params._id = Random.id()
-    job.params._className = className
+    #job.params._id = Random.id()
+    #job.params._className = className
 
-    params = job.params
+    #params = job.params
 
-    queue.enqueue className, params, options, callback
+    #queue.enqueue className, params, options, callback
+    Jobs.insert
+      _className: className
+      name: className
+      params: job.params
+      queue: 'jobs'
+      attempts:
+        count: 10
+        delay: 10000
+        strategy: 'exponential'
+      timeout: 10
+      status: 'queued'
+      enqueued: new Date()
+      delay: new Date()
+      priority: 0
 
 
   # Generic job handler for all jobs
@@ -42,7 +56,7 @@ class Job
   @handler: (job, callback) ->
     # Instantiate approprite job handler
     className = job._className
-    handler = new global[className](job)
+    handler = new global[className](job.params)
 
     _ex = null
 
@@ -54,12 +68,14 @@ class Job
       result = handler.handleJob()
 
       # Forward results to monq callback
-      callback null, result
+      #callback null, result
+      Jobs.update job._id, $set: status: 'complete'
 
     catch ex
       _ex = ex
       Cluster.log "Error in #{className} handler:\n", _ex
-      callback ex
+      Jobs.update job._id, $set: status: 'failed'
+      #callback ex
 
     finally
       # After hook

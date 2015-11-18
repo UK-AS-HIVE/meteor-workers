@@ -1,4 +1,4 @@
-Monq = Npm.require("monq")(process.env.MONGO_URL)
+#Monq = Npm.require("monq")(process.env.MONGO_URL)
 
 withJobs = (cb) ->
   _.each global, (val, key) ->
@@ -35,17 +35,51 @@ Cluster.startupWorker ->
   while i < monqWorkers
     i++
     Meteor.setTimeout ->
-      worker = Monq.worker ["jobs"]
+      claimAndProcessNextJob = ->
+        query =
+          status: 'queued'
+          queue: 'jobs'
+          delay: $lte: new Date()
+        sort =
+          [['priority', 'desc'], ['_id', 'asc']]
+        update =
+          $set:
+            status: 'dequeued'
+            dequeued: new Date()
+        options =
+          new: true
 
-      withJobs (val, key) ->
-        handlers = {}
-        handlers[key] = Meteor.bindEnvironment Job.handler
-        worker.register handlers
+        Future = Npm.require 'fibers/future'
+        f = new Future()
+        Jobs.rawCollection().findAndModify query, sort, update, options, Meteor.bindEnvironment (err, jobDoc) ->
+          if jobDoc?
+            # Find globally registered Job class which matches the type
+            if not global[jobDoc._className]?
+              throw new Error "No handler for job of class #{jobDoc._className}"
 
-      worker.on "complete", Meteor.bindEnvironment (data) ->
-        Jobs.remove "params._id": data.params._id
+            Job.handler jobDoc, Meteor.bindEnvironment (err, res) ->
+              return
+          else
+            # No job is available, so observe until something comes up...
+            ready = false
+            f2 = new Future()
+            delete query.delay
+            handle = Jobs.find(query).observe
+              added: ->
+                if ready
+                  f2.return()
+            ready = true
+            f2.wait()
+            handle.stop()
 
-      worker.start()
+          f.return()
+
+        f.wait()
+
+        Meteor.setTimeout claimAndProcessNextJob, 0
+
+      claimAndProcessNextJob()
     , 100 * i
 
   Cluster.log "Started #{monqWorkers} monq workers."
+
