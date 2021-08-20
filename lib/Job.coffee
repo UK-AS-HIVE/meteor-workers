@@ -1,6 +1,3 @@
-#Monq = Npm.require("monq")(process.env.MONGO_URL)
-#queue = Monq.queue "jobs"
-
 #
 # Abstract Job class for all actual jobs to subclass
 # - Shared between master and worker processes

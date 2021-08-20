@@ -36,43 +36,51 @@ Cluster.startupWorker ->
     i++
     Meteor.setTimeout ->
       claimAndProcessNextJob = ->
+        #Cluster.log 'claimAndProcessNextJob', Jobs.find().fetch()
         query =
-          status: 'queued'
-          queue: 'jobs'
-          delay: $lte: new Date()
-        sort =
-          [['priority', 'desc'], ['_id', 'asc']]
+            status: 'queued'
+            queue: 'jobs'
+            delay: $lte: new Date()
         update =
           $set:
             status: 'dequeued'
             dequeued: new Date()
         options =
-          new: true
+          sort:
+            [['priority', 'desc'], ['_id', 'asc']]
+          returnNewDocument: true
+          upsert: false
 
         Future = Npm.require 'fibers/future'
         f = new Future()
-        Jobs.rawCollection().findAndModify query, sort, update, options, Meteor.bindEnvironment (err, jobDoc) ->
-          if jobDoc?
-            # Find globally registered Job class which matches the type
-            if not global[jobDoc._className]?
-              throw new Error "No handler for job of class #{jobDoc._className}"
+        #Jobs.rawCollection().findAndModify query, sort, update, options, Meteor.bindEnvironment (err, jobDoc) ->
+        res = Jobs.rawCollection().findOneAndUpdate query, update, options
+        res
+          .then Meteor.bindEnvironment (jobDoc) ->
+            if jobDoc? and jobDoc.value?
+              jobDoc = jobDoc.value
+              # Find globally registered Job class which matches the type
+              if not global[jobDoc._className]?
+                throw new Error "No handler for job of class #{jobDoc._className}"
 
-            Job.handler jobDoc, Meteor.bindEnvironment (err, res) ->
-              return
-          else
-            # No job is available, so observe until something comes up...
-            ready = false
-            f2 = new Future()
-            delete query.delay
-            handle = Jobs.find(query).observe
-              added: ->
-                if ready
-                  f2.return()
-            ready = true
-            f2.wait()
-            handle.stop()
+              Job.handler jobDoc, Meteor.bindEnvironment (err, res) ->
+                return
+            else
+              # No job is available, so observe until something comes up...
+              ready = false
+              f2 = new Future()
+              delete query.delay
+              handle = Jobs.find(query).observe
+                added: ->
+                  if ready
+                    f2.return()
+              ready = true
+              f2.wait()
+              handle.stop()
 
-          f.return()
+            f.return()
+          .catch (err) ->
+            console.log "Error retrieving job from queue: ", err
 
         f.wait()
 
@@ -81,5 +89,5 @@ Cluster.startupWorker ->
       claimAndProcessNextJob()
     , 100 * i
 
-  Cluster.log "Started #{monqWorkers} monq workers."
+  Cluster.log "Started #{monqWorkers} workers."
 
